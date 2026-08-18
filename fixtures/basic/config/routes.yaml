@@ -1,0 +1,4 @@
+configured_run:
+  path: /configured/run
+  controller: App\Service::run
+  methods: [POST]
