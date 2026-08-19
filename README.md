@@ -1,94 +1,74 @@
 # code-graph-parser-php
 
-PHP static graph parser for `code-graph-engine`. It speaks the same one-request/one-`GraphDelta`
-process protocol as the Go and JavaScript parsers and does not keep project ASTs in global memory.
+Native PHP process parser for `code-graph-engine`. PHP source is parsed with
+`nikic/php-parser`; production parsing does not use TypeScript or Node.js.
 
-## Graph model
+## Graph mapping
 
-The parser intentionally reuses the engine's existing structural relationships:
+- PHP namespace (or `<global>`) -> `CodePackage`
+- each PHP file/namespace scope -> synthetic file-scoped `CodeUnit`
+- class/interface/trait -> `CodeUnit`
+- namespace functions and synthetic `<file-init>()` -> functions of the file-scoped unit
+- methods -> functions of their class/interface/trait unit
+- closures/arrow functions -> synthetic file-position-stable functions
+- calls -> `CALLS`; unresolved/dynamic targets -> placeholder `CodeFunction`
+- class inheritance and implementation -> `EXTENDS` / `IMPLEMENTS`
 
-```text
-CodePackage(namespace)
-  -> PACKAGE_TO_UNIT
-  -> synthetic CodeUnit(namespace block in one file)
-  -> UNIT_TO_FUNCTION
-  -> namespace/global function or synthetic <file-init>
-```
+Both real and synthetic nodes retain `projectFilePath`, so incremental file deletion remains
+compatible with the engine. The synthetic `<file-init>()` is only a caller node for executable
+top-level PHP statements; it does not pretend to be a source-declared function.
 
-Classes, interfaces, traits, and enums are real `CodeUnit` nodes. Their methods use
-`UNIT_TO_FUNCTION`. Top-level executable statements are represented by a synthetic
-`CodeFunction` named `<file-init>` so their outgoing `CALLS` relationships have a valid caller.
+Names and imports are normalized by `php-parser`'s `NameResolver`. Direct functions, named static
+calls, `self::`, `parent::`, `$this->method()`, declared parameter/property types, promoted
+constructor properties, constructor assignments, and local `new` assignments can bind statically.
+Calls whose receiver cannot be proven from source are preserved as placeholders instead of being
+linked to an arbitrary same-name method.
 
-The synthetic namespace/global unit is file-scoped. This is required by the engine's
-`projectFilePath` validation and file-based incremental deletion behavior.
+For incremental requests, `sourceFiles` is the SCAN set (nodes emitted in this delta), while PHP
+files under `projectRoot` form the LOAD set used for symbol binding. Therefore a scanned file can
+resolve a function declared in another project file without emitting that dependency file again.
 
-## Supported graph elements
+## Endpoint extraction
 
-- namespace and global packages
-- namespace/global functions
-- class, interface, trait, and enum units
-- methods and constructors
-- `EXTENDS`, `IMPLEMENTS`, and local `OVERRIDES`
-- direct/imported function calls, constructors, `$this->method()` calls, and static method calls
-- source-only receiver type binding from parameter/return/property declarations, constructor property
-  promotion, constructor assignments, local `new` assignments, inheritance, interfaces, and PHPDoc
-- placeholder functions for unresolved or external calls
-- top-level executable code through `<file-init>`
+Endpoint facts come from the sibling native PHP package `static-extract-php`. This repository
+contains no built-in framework or business rules. The engine/caller supplies rules through
+`ParseRequest.ruleSources`; `ruleTexts` is also accepted by the CLI for conformance tests.
 
-Endpoint extraction is provided by the sibling `static-extract-php` package. It reuses the
-same parsed PHP AST and maps SER facts to HTTP, MQ, Redis, and DB endpoint nodes. Built-in HTTP
-presets cover Laravel route groups, Symfony attributes and YAML route resources, and Slim route
-groups. Symfony YAML service declarations and statically declared Slim container factories are
-used for controller binding without starting either framework.
+No rules means no endpoints.
 
-Enable all local PHP presets in a process request with:
-
-```json
-{
-  "staticExtractPresetRules": true
-}
-```
-
-Or pass project-specific SER through `ruleSources` (file paths) and `ruleTexts` (inline rules).
-
-## Build and test
+## Install and test
 
 ```bash
-npm install
-npm test
+composer install
+composer test
 ```
 
-## CLI
-
-Parse a whole project:
+For a machine without local PHP:
 
 ```bash
-node dist/cli.js --project /path/to/php-project --project-name demo
+docker run --rm -v "$(dirname "$PWD"):/workspace" \
+  -w /workspace/code-graph-parser-php composer:2 install
+./bin/code-graph-parser-php-docker --project fixtures/basic --project-name demo
 ```
 
-Use the engine process protocol:
+## Engine process protocol
 
 ```bash
-echo '{"projectName":"demo","language":"php","projectRoot":"/repo","sourceFiles":["/repo/src/App.php"]}' \
-  | node dist/cli.js --stdio
+printf '%s' '{
+  "projectName":"demo",
+  "language":"php",
+  "projectRoot":"/repo",
+  "sourceFiles":["/repo/src/App.php"],
+  "ruleSources":["/repo/rules/http.ser"]
+}' | php bin/code-graph-parser-php --stdio
 ```
 
-Engine configuration:
+Engine configuration with local PHP:
 
 ```bash
 CODEGRAPH_PARSER_PROCESS_LANGUAGES=php
-CODEGRAPH_PARSER_PHP_COMMAND="node /path/to/code-graph-parser-php/dist/cli.js --stdio"
+CODEGRAPH_PARSER_PHP_COMMAND="php /path/to/code-graph-parser-php/bin/code-graph-parser-php --stdio"
 ```
 
-The parser scans `.php` files and skips `.git`, `vendor`, `node_modules`, and common editor
-directories during a full-project parse. When `sourceFiles` is provided, only those files are
-emitted; unresolved cross-file calls become stable placeholders.
-
-Type binding is intentionally static. It does not boot a framework container or choose a runtime
-implementation for an interface. Calls whose receiver cannot be proven from source remain
-`dynamic-receiver` placeholders; statically named methods outside the parsed source remain
-`statically-named-target` placeholders.
-
-See [validation/krayin-crm.md](./validation/krayin-crm.md) and
-[validation/enterprise-projects.md](./validation/enterprise-projects.md) for reproducible
-Laravel, Symfony, and legacy Slim enterprise-project validation snapshots.
+`bin/code-graph-parser-php-docker` is a development wrapper for machines without PHP. The parser
+inside the container is still the same PHP entrypoint.

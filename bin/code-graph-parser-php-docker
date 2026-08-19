@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+parser_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+workspace=$(dirname -- "$parser_root")
+
+exec docker run --rm -i \
+  -v "$workspace:$workspace" \
+  -w "$parser_root" \
+  composer:2 php "$parser_root/bin/code-graph-parser-php" "$@"

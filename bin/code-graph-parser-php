@@ -1,0 +1,18 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+ini_set('display_errors', 'stderr');
+
+require dirname(__DIR__) . '/vendor/autoload.php';
+
+use Poseidon\CodeGraphParserPhp\Parser;
+
+$options = getopt('', ['stdio', 'project:', 'project-name:', 'request:', 'out:']);
+if (isset($options['stdio'])) $request = json_decode(stream_get_contents(STDIN), true, flags: JSON_THROW_ON_ERROR);
+elseif (isset($options['request'])) $request = json_decode((string) file_get_contents($options['request']), true, flags: JSON_THROW_ON_ERROR);
+else $request = ['projectRoot' => $options['project'] ?? '', 'projectName' => $options['project-name'] ?? basename($options['project'] ?? '')];
+$delta = (new Parser())->parse($request);
+$json = json_encode($delta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . PHP_EOL;
+if (isset($options['out'])) file_put_contents($options['out'], $json); else echo $json;
