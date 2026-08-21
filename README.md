@@ -10,7 +10,7 @@ Native PHP process parser for `code-graph-engine`. PHP source is parsed with
 - class/interface/trait -> `CodeUnit`
 - namespace functions and synthetic `<file-init>()` -> functions of the file-scoped unit
 - methods -> functions of their class/interface/trait unit
-- closures/arrow functions -> synthetic file-position-stable functions
+- assigned closures/arrow functions -> statically named functions; otherwise synthetic file-position-stable functions
 - calls -> `CALLS`; unresolved/dynamic targets -> placeholder `CodeFunction`
 - class inheritance and implementation -> `EXTENDS` / `IMPLEMENTS`
 
@@ -34,7 +34,9 @@ Endpoint facts come from the sibling native PHP package `static-extract-php`. Th
 contains no built-in framework or business rules. The engine/caller supplies rules through
 `ParseRequest.ruleSources`; `ruleTexts` is also accepted by the CLI for conformance tests.
 
-No rules means no endpoints.
+No rules means no endpoints, while packages, units, functions, calls, and type relationships are
+still emitted normally. Endpoint `other` is an optional caller-defined string and does not
+participate in node identity.
 
 ## Install and test
 

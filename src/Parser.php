@@ -29,6 +29,7 @@ final class Parser
         $calls = [];
         $phpParser = (new ParserFactory())->createForNewestSupportedVersion();
         $definitions = $this->definitionIndex($root, $phpParser);
+        $typeDefinitions = $this->typeDefinitionIndex($root, $phpParser);
 
         foreach ($files as $absolute) {
             $relative = str_replace('\\', '/', substr($absolute, strlen($root) + 1));
@@ -54,7 +55,8 @@ final class Parser
             $functions[$initId] = $this->functionNode($initId, '<file-init>', $init, $project, $relative, '<file-init>()', false);
             $this->relationship($relationships, $moduleId, 'UNIT_TO_FUNCTION', $initId, $project, 1);
 
-            $this->walk($nodes, ['namespace' => $namespace, 'class' => null, 'parentClass' => null, 'fileScope' => $moduleName, 'functionId' => $initId, 'ownerId' => $moduleId, 'parentOwnerId' => $moduleId, 'variableTypes' => [], 'propertyTypes' => []], function (Node $node, array $context) use (&$units, &$functions, &$relationships, &$definitions, &$calls, $project, $relative): void {
+            $module = preg_replace('/\.[^.]+$/', '', str_replace(['\\', '/'], '.', $relative)) ?: '<global>';
+            $this->walk($nodes, ['namespace' => $namespace, 'class' => null, 'parentClass' => null, 'fileScope' => $moduleName, 'module' => $module, 'callableName' => null, 'functionId' => $initId, 'ownerId' => $moduleId, 'parentOwnerId' => $moduleId, 'variableTypes' => [], 'propertyTypes' => []], function (Node $node, array $context) use (&$units, &$functions, &$relationships, &$definitions, &$calls, $typeDefinitions, $project, $relative): void {
                 if ($node instanceof Node\Stmt\ClassLike && $node->name !== null) {
                     $qualified = $context['class'];
                     $id = 'unit:' . $qualified;
@@ -74,7 +76,8 @@ final class Parser
                 }
                 if ($node instanceof Node\Stmt\Function_ || $node instanceof Node\Stmt\ClassMethod || $node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction) {
                     $syntheticClosure = $node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction;
-                    $name = $syntheticClosure ? '<closure>' : $node->name->toString();
+                    $callableName = $syntheticClosure ? ($context['declaredCallableName'] ?? null) : null;
+                    $name = $syntheticClosure ? ($callableName ?? '<closure>') : $node->name->toString();
                     $qualified = $syntheticClosure
                         ? $this->closureQualifiedName($node, $context)
                         : ($node instanceof Node\Stmt\ClassMethod && $context['class']
@@ -82,7 +85,7 @@ final class Parser
                     $id = 'fn:' . $qualified;
                     $isStatic = $node instanceof Node\Stmt\ClassMethod && $node->isStatic();
                     $functions[$id] = $this->functionNode($id, $name, $qualified, $project, $relative, $name . '()', false, $isStatic, $name === '__construct', $node->getStartLine(), $node->getEndLine());
-                    if (!$syntheticClosure) {
+                    if (!$syntheticClosure || $callableName !== null) {
                         $definitions[strtolower($qualified)] = $id;
                         $definitions[strtolower(preg_replace('/\(\)$/', '', $qualified) ?? $qualified)] = $id;
                         if ($node instanceof Node\Stmt\ClassMethod && $context['class']) {
@@ -92,6 +95,11 @@ final class Parser
                         $definitions[strtolower($name)] ??= $id;
                     }
                     $this->relationship($relationships, $context['parentOwnerId'], 'UNIT_TO_FUNCTION', $id, $project, $node->getStartLine());
+                    if ($node instanceof Node\Stmt\ClassMethod && $context['class'] && !$node->isPrivate()) {
+                        foreach ($this->overriddenMethodIds($typeDefinitions, $context['class'], $name) as $overriddenId) {
+                            $this->relationship($relationships, $id, 'OVERRIDES', $overriddenId, $project, $node->getStartLine());
+                        }
+                    }
                 }
                 if ($node instanceof Expr\CallLike) {
                     $target = $this->callTarget($node, $context);
@@ -119,15 +127,39 @@ final class Parser
             $methodValue = strtoupper((string) ($fact['fields']['method'] ?? 'ANY'));
             $methods = $endpointType === 'HTTP' ? (preg_split('/\s*,\s*/', $methodValue, flags: PREG_SPLIT_NO_EMPTY) ?: ['ANY']) : [$methodValue];
             $path = (string) ($fact['fields']['path'] ?? '');
-            $handler = strtolower((string) ($fact['fields']['handler'] ?? ''));
+            $identityValue = match ($endpointType) {
+                'HTTP' => trim($path),
+                'MQ' => trim((string) ($fact['fields']['topic'] ?? '')),
+                'REDIS' => trim((string) ($fact['fields']['keyPattern'] ?? $fact['fields']['key'] ?? '')),
+                'DB' => trim((string) ($fact['fields']['tableName'] ?? $fact['fields']['table'] ?? '')),
+                default => '',
+            };
+            if ($identityValue === '') continue;
+            $handler = strtolower((string) ($direction === 'inbound'
+                ? ($fact['fields']['handler'] ?? '')
+                : ($fact['enclosingSymbol'] ?? $fact['fields']['handler'] ?? '')));
             $handlerId = $definitions[$handler] ?? $definitions[$handler . '()'] ?? null;
             foreach ($methods as $method) {
-                $identity = $endpointType === 'HTTP' ? "$endpointType:$method:$path" : $endpointType . ':' . implode(':', $fact['fields']);
-                $id = 'endpoint:' . $direction . ':' . $endpointType . ':' . sha1($identity);
+                $identity = $endpointType === 'HTTP' ? "$endpointType:$method:$path" : "$endpointType:$identityValue";
+                $id = 'endpoint:' . $direction . ':' . $endpointType . ':' . sha1("$direction:$endpointType:$identity");
                 $endpoints[$id] = $this->base($id, $identity, $id, $project, $fact['projectFilePath']) + [
                     'gitRepoUrl' => $gitRepo, 'gitBranch' => $gitBranch, 'startLine' => $fact['startLine'], 'endLine' => $fact['endLine'],
-                    'endpointType' => $endpointType, 'direction' => $direction, 'isExternal' => false, 'parseLevel' => 'full', 'matchIdentity' => $identity,
+                    'endpointType' => $endpointType, 'direction' => $direction, 'isExternal' => $direction === 'outbound', 'parseLevel' => (string) ($fact['fields']['parseLevel'] ?? 'full'), 'matchIdentity' => $identity,
                     'endpointKind' => strtolower($endpointType), 'httpMethod' => $endpointType === 'HTTP' ? $method : null, 'path' => $endpointType === 'HTTP' ? $path : null, 'normalizedPath' => $endpointType === 'HTTP' ? $path : null,
+                    'other' => array_key_exists('other', $fact['fields']) ? (string) $fact['fields']['other'] : null,
+                ];
+                if ($endpointType === 'MQ') $endpoints[$id] += [
+                    'topic' => $identityValue,
+                    'operation' => $fact['fields']['operation'] ?? null,
+                    'brokerType' => $fact['fields']['brokerType'] ?? null,
+                ];
+                elseif ($endpointType === 'REDIS') $endpoints[$id] += [
+                    'command' => $fact['fields']['command'] ?? null,
+                    'keyPattern' => $identityValue,
+                ];
+                elseif ($endpointType === 'DB') $endpoints[$id] += [
+                    'tableName' => $identityValue,
+                    'dbOperation' => $fact['fields']['dbOperation'] ?? null,
                 ];
                 if ($handlerId !== null) {
                     $relationshipType = $direction === 'inbound' ? 'ENDPOINT_TO_FUNCTION' : 'FUNCTION_TO_ENDPOINT';
@@ -216,6 +248,77 @@ final class Parser
         return $definitions;
     }
 
+    /**
+     * @return array<string, array{qualified: string, parents: list<string>, methods: array<string, array{id: string, private: bool}>}>
+     */
+    private function typeDefinitionIndex(string $root, \PhpParser\Parser $phpParser): array
+    {
+        $types = [];
+        foreach ($this->files($root, []) as $absolute) {
+            try {
+                $nodes = $phpParser->parse((string) file_get_contents($absolute)) ?? [];
+                $traverser = new NodeTraverser();
+                $traverser->addVisitor(new NameResolver(null, ['preserveOriginalNames' => true]));
+                $nodes = $traverser->traverse($nodes);
+            } catch (\Throwable) {
+                continue;
+            }
+            $namespace = $this->namespaceOf($nodes);
+            $this->walk($nodes, ['namespace' => $namespace, 'class' => null, 'parentClass' => null, 'fileScope' => '', 'functionId' => '', 'ownerId' => '', 'parentOwnerId' => '', 'variableTypes' => [], 'propertyTypes' => []], function (Node $node, array $context) use (&$types): void {
+                if (!$node instanceof Node\Stmt\ClassLike || $node->name === null || !$context['class']) return;
+                $parents = [];
+                if ($node instanceof Node\Stmt\Class_ && $node->extends instanceof Name) {
+                    $parents[] = $this->resolvedName($node->extends);
+                }
+                if ($node instanceof Node\Stmt\Interface_) {
+                    foreach ($node->extends as $parent) $parents[] = $this->resolvedName($parent);
+                }
+                if ($node instanceof Node\Stmt\Class_ || $node instanceof Node\Stmt\Enum_) {
+                    foreach ($node->implements as $interface) $parents[] = $this->resolvedName($interface);
+                }
+                $methods = [];
+                foreach ($node->getMethods() as $method) {
+                    $name = $method->name->toString();
+                    $methods[strtolower($name)] = [
+                        'id' => 'fn:' . $context['class'] . '::' . $name . '()',
+                        'private' => $method->isPrivate(),
+                    ];
+                }
+                $types[strtolower($context['class'])] = [
+                    'qualified' => $context['class'],
+                    'parents' => $parents,
+                    'methods' => $methods,
+                ];
+            });
+        }
+        return $types;
+    }
+
+    /**
+     * @param array<string, array{qualified: string, parents: list<string>, methods: array<string, array{id: string, private: bool}>}> $types
+     * @return list<string>
+     */
+    private function overriddenMethodIds(array $types, string $class, string $method): array
+    {
+        $result = [];
+        $visited = [];
+        $methodKey = strtolower($method);
+        $visit = function (string $qualified) use (&$visit, &$result, &$visited, $types, $methodKey): void {
+            $key = strtolower($qualified);
+            if (isset($visited[$key])) return;
+            $visited[$key] = true;
+            $type = $types[$key] ?? null;
+            if ($type === null) return;
+            $candidate = $type['methods'][$methodKey] ?? null;
+            if ($candidate !== null && !$candidate['private']) $result[$candidate['id']] = true;
+            foreach ($type['parents'] as $parent) $visit($parent);
+        };
+        $current = $types[strtolower($class)] ?? null;
+        if ($current === null) return [];
+        foreach ($current['parents'] as $parent) $visit($parent);
+        return array_keys($result);
+    }
+
     private function walk(iterable $nodes, array $context, callable $visitor): void
     {
         foreach ($nodes as $node) {
@@ -229,6 +332,8 @@ final class Parser
                 $next['ownerId'] = 'unit:' . $next['class'];
                 $next['propertyTypes'] = $this->propertyTypes($node);
             }
+            $assignedName = $this->assignedCallableName($node);
+            if ($assignedName !== null) $next['callableName'] = $assignedName;
             if ($node instanceof Node\Stmt\Function_ || $node instanceof Node\Stmt\ClassMethod) {
                 $name = $node->name->toString();
                 $qualified = $node instanceof Node\Stmt\ClassMethod && $next['class'] ? $next['class'] . '::' . $name . '()' : ltrim($next['namespace'] . '\\' . $name . '()', '\\');
@@ -236,8 +341,10 @@ final class Parser
                 $next['variableTypes'] = $this->variableTypes($node);
             }
             if ($node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction) {
+                $next['declaredCallableName'] = $next['callableName'] ?? null;
                 $next['functionId'] = 'fn:' . $this->closureQualifiedName($node, $next);
                 $next['variableTypes'] = $this->variableTypes($node);
+                $next['callableName'] = null;
             }
             $visitor($node, $next);
             foreach ($node->getSubNodeNames() as $name) {
@@ -288,7 +395,29 @@ final class Parser
 
     private function closureQualifiedName(Node $node, array $context): string
     {
+        $assigned = $context['declaredCallableName'] ?? null;
+        if (is_string($assigned) && $assigned !== '') {
+            if (($context['class'] ?? null) !== null) return $context['class'] . '::' . $assigned . '()';
+            $owner = ($context['namespace'] ?? '') ?: ($context['module'] ?? '<global>');
+            return ltrim($owner . '\\' . $assigned . '()', '\\');
+        }
         return $context['fileScope'] . '::<closure@' . $node->getStartLine() . ':' . max(0, $node->getStartFilePos()) . '>()';
+    }
+
+    private function assignedCallableName(Node $node): ?string
+    {
+        $target = null;
+        if ($node instanceof Expr\Assign && $node->expr instanceof Node\FunctionLike) $target = $node->var;
+        elseif ($node instanceof Expr\ArrayItem && $node->value instanceof Node\FunctionLike) {
+            if ($node->key instanceof Node\Scalar\String_ || $node->key instanceof Node\Scalar\Int_) return (string) $node->key->value;
+            return null;
+        }
+        if ($target instanceof Expr\Variable && is_string($target->name)) return $target->name;
+        if ($target instanceof Expr\PropertyFetch && $target->name instanceof Node\Identifier) return $target->name->toString();
+        if ($target instanceof Expr\ArrayDimFetch && ($target->dim instanceof Node\Scalar\String_ || $target->dim instanceof Node\Scalar\Int_)) {
+            return (string) $target->dim->value;
+        }
+        return null;
     }
 
     /** @return array<string, string> */

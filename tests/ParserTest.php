@@ -134,16 +134,68 @@ PHP);
         self::assertNotContains('fn:<unresolved>::<dynamic>::work()', array_column($delta['functions'], 'id'));
     }
 
-    public function testUsesSyntheticClosureAsCallSource(): void
+    public function testUsesStaticallyAssignedClosureAsCallSource(): void
     {
         $root = $this->fixture("<?php\nnamespace App;\nfunction helper(): void {}\n\$callback = function (): void { helper(); };\n");
         $delta = (new Parser())->parse(['projectRoot' => $root, 'projectName' => 'native-php']);
-        $closureId = array_values(array_filter(array_column($delta['functions'], 'id'), static fn (string $id): bool => str_starts_with($id, 'fn:App@App.php::<closure@4:')))[0] ?? '';
+        $closureId = 'fn:App\callback()';
         self::assertNotSame('', $closureId);
         self::assertContains($closureId, array_column($delta['functions'], 'id'));
         $calls = array_values(array_filter($delta['relationships'], static fn (array $item): bool => $item['relationshipType'] === 'CALLS'));
         self::assertContains($closureId, array_column($calls, 'fromNodeId'));
         self::assertContains('fn:App\helper()', array_column($calls, 'toNodeId'));
+    }
+
+    public function testEmitsExactInheritanceImplementationAndOverrideRelationships(): void
+    {
+        $root = $this->fixture(<<<'PHP'
+<?php
+namespace App;
+interface Gateway { public function send(string $value): string; }
+interface ChildGateway extends Gateway { public function receive(): string; }
+abstract class Base {
+    public function run(): void {}
+    private function hidden(): void {}
+}
+class Service extends Base implements ChildGateway {
+    public function run(): void {}
+    public function send(string $value): string { return $value; }
+    public function receive(): string { return 'ok'; }
+    public function hidden(): void {}
+}
+class Unrelated { public function send(string $value): string { return $value; } }
+PHP);
+        $delta = (new Parser())->parse(['projectRoot' => $root, 'projectName' => 'native-php']);
+        $relationships = [];
+        foreach ($delta['relationships'] as $item) {
+            $relationships[$item['fromNodeId'] . '|' . $item['relationshipType'] . '|' . $item['toNodeId']] = $item;
+        }
+        $expected = [
+            'unit:App\ChildGateway|EXTENDS|unit:App\Gateway',
+            'unit:App\Service|EXTENDS|unit:App\Base',
+            'unit:App\Service|IMPLEMENTS|unit:App\ChildGateway',
+            'fn:App\Service::run()|OVERRIDES|fn:App\Base::run()',
+            'fn:App\Service::send()|OVERRIDES|fn:App\Gateway::send()',
+            'fn:App\Service::receive()|OVERRIDES|fn:App\ChildGateway::receive()',
+        ];
+        foreach ($expected as $key) {
+            self::assertArrayHasKey($key, $relationships);
+            [$from, $type, $to] = explode('|', $key);
+            self::assertSame('rel:' . sha1("$from|$type|$to"), $relationships[$key]['id']);
+        }
+        self::assertArrayNotHasKey('fn:App\Service::hidden()|OVERRIDES|fn:App\Base::hidden()', $relationships);
+        self::assertArrayNotHasKey('fn:App\Unrelated::send()|OVERRIDES|fn:App\Gateway::send()', $relationships);
+
+        $nodeIds = array_fill_keys(array_merge(
+            array_column($delta['packages'], 'id'),
+            array_column($delta['units'], 'id'),
+            array_column($delta['functions'], 'id'),
+            array_column($delta['endpoints'], 'id'),
+        ), true);
+        foreach ($delta['relationships'] as $relationship) {
+            self::assertArrayHasKey($relationship['fromNodeId'], $nodeIds);
+            self::assertArrayHasKey($relationship['toNodeId'], $nodeIds);
+        }
     }
 
     public function testExpandsMultipleHttpMethodsIntoDistinctEndpoints(): void
@@ -162,6 +214,96 @@ PHP);
             'ruleSources' => [dirname(__DIR__, 2) . '/static-extract-php/examples/conformance/php-endpoints/rules/symfony-route.ser'],
         ]);
         self::assertEqualsCanonicalizing(['HTTP:GET:/save', 'HTTP:POST:/save'], array_column($delta['endpoints'], 'matchIdentity'));
+    }
+
+    public function testConfiguredAssignedCallableCreatesInboundEndpointAndOther(): void
+    {
+        $root = $this->fixture(<<<'PHP'
+<?php
+namespace App;
+final class Handlers {
+    public function configure(): void { $handlers = ['save' => fn (): string => 'ok']; }
+}
+PHP);
+        $delta = (new Parser())->parse([
+            'projectRoot' => $root,
+            'projectName' => 'native-php',
+            'ruleTexts' => [<<<'SER'
+rule "Configured callable"
+fact http_route
+find method save
+let path =
+  from method take value
+let handler =
+  from method take reference
+build {
+  endpointType: "HTTP"
+  direction: "inbound"
+  method: "POST"
+  path: path
+  handler: handler
+  other: "source=caller-ser"
+}
+dict {
+  App.Handlers.save() = /save
+}
+SER],
+        ]);
+        self::assertContains('fn:App\Handlers::save()', array_column($delta['functions'], 'id'));
+        self::assertCount(1, $delta['endpoints']);
+        self::assertSame('source=caller-ser', $delta['endpoints'][0]['other']);
+        self::assertSame('endpoint:inbound:HTTP:' . sha1('inbound:HTTP:HTTP:POST:/save'), $delta['endpoints'][0]['id']);
+        self::assertSame('config', $delta['endpoints'][0]['parseLevel']);
+        self::assertContains('ENDPOINT_TO_FUNCTION', array_column($delta['relationships'], 'relationshipType'));
+    }
+
+    public function testStandardEndpointIdentitiesExcludeOtherMetadata(): void
+    {
+        $root = $this->fixture(<<<'PHP'
+<?php
+namespace App;
+function run(): void {
+    $http->get('/health');
+    $mq->send('orders');
+    $redis->get('user:*');
+    $db->query('users');
+}
+PHP);
+        $rules = [];
+        foreach ([
+            ['HTTP', 'get', 'http', 'path', '/health', 'method: "GET"'],
+            ['MQ', 'send', 'mq', 'topic', 'orders', 'operation: "PRODUCE"'],
+            ['REDIS', 'get', 'redis', 'keyPattern', 'user:*', 'command: "GET"'],
+            ['DB', 'query', 'db', 'tableName', 'users', 'dbOperation: "QUERY"'],
+        ] as [$type, $call, $owner, $identityField, $value, $extra]) {
+            $rules[] = <<<SER
+rule "$type identity"
+fact {$owner}_endpoint
+find call $call
+when call owner $owner
+let identity =
+  from argument[0] take value
+build {
+  endpointType: "$type"
+  direction: "outbound"
+  $extra
+  $identityField: identity
+  other: "ignored-by-identity"
+}
+SER;
+        }
+        $delta = (new Parser())->parse([
+            'projectRoot' => $root,
+            'projectName' => 'native-php',
+            'ruleTexts' => $rules,
+        ]);
+        $identities = array_column($delta['endpoints'], 'matchIdentity');
+        self::assertEqualsCanonicalizing(['HTTP:GET:/health', 'MQ:orders', 'REDIS:user:*', 'DB:users'], $identities);
+        foreach ($delta['endpoints'] as $endpoint) {
+            self::assertSame('ignored-by-identity', $endpoint['other']);
+            self::assertSame('endpoint:outbound:' . $endpoint['endpointType'] . ':' . sha1('outbound:' . $endpoint['endpointType'] . ':' . $endpoint['matchIdentity']), $endpoint['id']);
+        }
+        self::assertCount(4, array_filter($delta['relationships'], static fn (array $item): bool => $item['relationshipType'] === 'FUNCTION_TO_ENDPOINT'));
     }
 
     private function fixture(string $source): string
