@@ -188,8 +188,36 @@ final class Parser
 
     private function relationship(array &$output, string $from, string $type, string $to, string $project, int $line): void
     {
+        $type = match ($type) {
+            'EXTENDS' => 'PHP_EXTENDS',
+            'IMPLEMENTS' => 'PHP_IMPLEMENTS',
+            'OVERRIDES' => 'PHP_OVERRIDES',
+            default => $type,
+        };
+        [$kind, $fromNodeType, $toNodeType] = match ($type) {
+            'PACKAGE_TO_UNIT' => ['CONTAINS', 'CodePackage', 'CodeUnit'],
+            'UNIT_TO_FUNCTION' => ['CONTAINS', 'CodeUnit', 'CodeFunction'],
+            'CALLS' => ['CALL', 'CodeFunction', 'CodeFunction'],
+            'PHP_EXTENDS' => ['SPECIALIZES', 'CodeUnit', 'CodeUnit'],
+            'PHP_IMPLEMENTS' => ['CONFORMS', 'CodeUnit', 'CodeUnit'],
+            'PHP_OVERRIDES' => ['REFINES', 'CodeFunction', 'CodeFunction'],
+            'ENDPOINT_TO_FUNCTION' => ['BINDS_ENDPOINT', 'CodeEndpoint', 'CodeFunction'],
+            'FUNCTION_TO_ENDPOINT' => ['BINDS_ENDPOINT', 'CodeFunction', 'CodeEndpoint'],
+            default => throw new \InvalidArgumentException("Missing relationship contract for $type"),
+        };
         $id = 'rel:' . sha1("$from|$type|$to");
-        $output[$id] ??= ['id' => $id, 'fromNodeId' => $from, 'toNodeId' => $to, 'relationshipType' => $type, 'language' => 'php', 'projectName' => $project, 'lineNumber' => $line];
+        $output[$id] ??= [
+            'id' => $id,
+            'fromNodeId' => $from,
+            'toNodeId' => $to,
+            'relationshipType' => $type,
+            'relationshipKind' => $kind,
+            'fromNodeType' => $fromNodeType,
+            'toNodeType' => $toNodeType,
+            'language' => 'php',
+            'projectName' => $project,
+            'lineNumber' => $line,
+        ];
     }
 
     private function files(string $root, array $sources): array

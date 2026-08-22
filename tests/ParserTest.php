@@ -171,20 +171,24 @@ PHP);
             $relationships[$item['fromNodeId'] . '|' . $item['relationshipType'] . '|' . $item['toNodeId']] = $item;
         }
         $expected = [
-            'unit:App\ChildGateway|EXTENDS|unit:App\Gateway',
-            'unit:App\Service|EXTENDS|unit:App\Base',
-            'unit:App\Service|IMPLEMENTS|unit:App\ChildGateway',
-            'fn:App\Service::run()|OVERRIDES|fn:App\Base::run()',
-            'fn:App\Service::send()|OVERRIDES|fn:App\Gateway::send()',
-            'fn:App\Service::receive()|OVERRIDES|fn:App\ChildGateway::receive()',
+            'unit:App\ChildGateway|PHP_EXTENDS|unit:App\Gateway',
+            'unit:App\Service|PHP_EXTENDS|unit:App\Base',
+            'unit:App\Service|PHP_IMPLEMENTS|unit:App\ChildGateway',
+            'fn:App\Service::run()|PHP_OVERRIDES|fn:App\Base::run()',
+            'fn:App\Service::send()|PHP_OVERRIDES|fn:App\Gateway::send()',
+            'fn:App\Service::receive()|PHP_OVERRIDES|fn:App\ChildGateway::receive()',
         ];
         foreach ($expected as $key) {
             self::assertArrayHasKey($key, $relationships);
             [$from, $type, $to] = explode('|', $key);
             self::assertSame('rel:' . sha1("$from|$type|$to"), $relationships[$key]['id']);
+            $isOverride = $type === 'PHP_OVERRIDES';
+            self::assertSame($isOverride ? 'REFINES' : ($type === 'PHP_IMPLEMENTS' ? 'CONFORMS' : 'SPECIALIZES'), $relationships[$key]['relationshipKind']);
+            self::assertSame($isOverride ? 'CodeFunction' : 'CodeUnit', $relationships[$key]['fromNodeType']);
+            self::assertSame($isOverride ? 'CodeFunction' : 'CodeUnit', $relationships[$key]['toNodeType']);
         }
-        self::assertArrayNotHasKey('fn:App\Service::hidden()|OVERRIDES|fn:App\Base::hidden()', $relationships);
-        self::assertArrayNotHasKey('fn:App\Unrelated::send()|OVERRIDES|fn:App\Gateway::send()', $relationships);
+        self::assertArrayNotHasKey('fn:App\Service::hidden()|PHP_OVERRIDES|fn:App\Base::hidden()', $relationships);
+        self::assertArrayNotHasKey('fn:App\Unrelated::send()|PHP_OVERRIDES|fn:App\Gateway::send()', $relationships);
 
         $nodeIds = array_fill_keys(array_merge(
             array_column($delta['packages'], 'id'),
@@ -240,19 +244,20 @@ build {
   endpointType: "HTTP"
   direction: "inbound"
   method: "POST"
-  path: path
+  path: path | normalize httpPath
   handler: handler
   other: "source=caller-ser"
 }
 dict {
-  App.Handlers.save() = /save
+  App.Handlers.save() = /save/{saveId}
 }
 SER],
         ]);
         self::assertContains('fn:App\Handlers::save()', array_column($delta['functions'], 'id'));
         self::assertCount(1, $delta['endpoints']);
         self::assertSame('source=caller-ser', $delta['endpoints'][0]['other']);
-        self::assertSame('endpoint:inbound:HTTP:' . sha1('inbound:HTTP:HTTP:POST:/save'), $delta['endpoints'][0]['id']);
+        self::assertSame('HTTP:POST:/save/{saveId}', $delta['endpoints'][0]['matchIdentity']);
+        self::assertSame('endpoint:inbound:HTTP:' . sha1('inbound:HTTP:HTTP:POST:/save/{saveId}'), $delta['endpoints'][0]['id']);
         self::assertSame('config', $delta['endpoints'][0]['parseLevel']);
         self::assertContains('ENDPOINT_TO_FUNCTION', array_column($delta['relationships'], 'relationshipType'));
     }

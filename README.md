@@ -12,7 +12,7 @@ Native PHP process parser for `code-graph-engine`. PHP source is parsed with
 - methods -> functions of their class/interface/trait unit
 - assigned closures/arrow functions -> statically named functions; otherwise synthetic file-position-stable functions
 - calls -> `CALLS`; unresolved/dynamic targets -> placeholder `CodeFunction`
-- class inheritance and implementation -> `EXTENDS` / `IMPLEMENTS`
+- class inheritance and implementation -> `PHP_EXTENDS` / `PHP_IMPLEMENTS`
 
 Both real and synthetic nodes retain `projectFilePath`, so incremental file deletion remains
 compatible with the engine. The synthetic `<file-init>()` is only a caller node for executable
