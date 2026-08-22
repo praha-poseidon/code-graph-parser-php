@@ -3,6 +3,8 @@
 
 declare(strict_types=1);
 
+// Canonical CLI entrypoint: parser-php.
+
 ini_set('display_errors', 'stderr');
 
 require dirname(__DIR__) . '/vendor/autoload.php';

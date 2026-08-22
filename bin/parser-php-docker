@@ -7,4 +7,4 @@ workspace=$(dirname -- "$parser_root")
 exec docker run --rm -i \
   -v "$workspace:$workspace" \
   -w "$parser_root" \
-  composer:2 php "$parser_root/bin/code-graph-parser-php" "$@"
+  composer:2 php "$parser_root/bin/parser-php" "$@"

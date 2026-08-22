@@ -50,7 +50,7 @@ For a machine without local PHP:
 ```bash
 docker run --rm -v "$(dirname "$PWD"):/workspace" \
   -w /workspace/code-graph-parser-php composer:2 install
-./bin/code-graph-parser-php-docker --project fixtures/basic --project-name demo
+./bin/parser-php-docker --project fixtures/basic --project-name demo
 ```
 
 ## Engine process protocol
@@ -62,15 +62,15 @@ printf '%s' '{
   "projectRoot":"/repo",
   "sourceFiles":["/repo/src/App.php"],
   "ruleSources":["/repo/rules/http.ser"]
-}' | php bin/code-graph-parser-php --stdio
+}' | php bin/parser-php --stdio
 ```
 
 Engine configuration with local PHP:
 
 ```bash
 CODEGRAPH_PARSER_PROCESS_LANGUAGES=php
-CODEGRAPH_PARSER_PHP_COMMAND="php /path/to/code-graph-parser-php/bin/code-graph-parser-php --stdio"
+CODEGRAPH_PARSER_PHP_COMMAND="php /path/to/code-graph-parser-php/bin/parser-php --stdio"
 ```
 
-`bin/code-graph-parser-php-docker` is a development wrapper for machines without PHP. The parser
+`bin/parser-php-docker` is a development wrapper for machines without PHP. The parser
 inside the container is still the same PHP entrypoint.

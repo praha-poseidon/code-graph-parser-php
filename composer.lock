@@ -79,7 +79,7 @@
                 "phpunit/phpunit": "^11.0"
             },
             "bin": [
-                "bin/static-extract-php"
+                "bin/extract-php"
             ],
             "type": "library",
             "autoload": {
