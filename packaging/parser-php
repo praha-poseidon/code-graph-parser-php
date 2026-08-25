@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CODEGRAPH_LAUNCHER="${BASH_SOURCE[0]}"
+while [[ -L "$CODEGRAPH_LAUNCHER" ]]; do
+  CODEGRAPH_LAUNCHER_DIR="$(cd "$(dirname "$CODEGRAPH_LAUNCHER")" && pwd)"
+  CODEGRAPH_LAUNCHER="$(readlink "$CODEGRAPH_LAUNCHER")"
+  [[ "$CODEGRAPH_LAUNCHER" = /* ]] || CODEGRAPH_LAUNCHER="$CODEGRAPH_LAUNCHER_DIR/$CODEGRAPH_LAUNCHER"
+done
+ROOT_DIR="$(cd "$(dirname "$CODEGRAPH_LAUNCHER")/.." && pwd)"
+exec "$ROOT_DIR/runtime/frankenphp" php-cli "$ROOT_DIR/app/bin/parser-php" "$@"

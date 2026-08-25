@@ -1,5 +1,16 @@
 # code-graph-parser-php
 
+## Self-contained CLI release
+
+Each `v*` tag publishes `parser-php-<tag>-linux-x64.tar.gz` with a standalone PHP runtime and Composer dependencies.
+
+```bash
+tar -xzf parser-php-*-linux-x64.tar.gz
+cd parser-php-*-linux-x64
+./install.sh
+parser-php --stdio
+```
+
 Native PHP process parser for `code-graph-engine`. PHP source is parsed with
 `nikic/php-parser`; production parsing does not use TypeScript or Node.js.
 
