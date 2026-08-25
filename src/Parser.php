@@ -74,6 +74,11 @@ final class Parser
                     }
                     if ($node instanceof Node\Stmt\Class_ || $node instanceof Node\Stmt\Enum_) foreach ($node->implements as $base) $this->relationship($relationships, $id, 'IMPLEMENTS', 'unit:' . $this->resolvedName($base), $project, $node->getStartLine());
                 }
+                if ($node instanceof Node\Stmt\TraitUse && $context['class']) {
+                    foreach ($node->traits as $trait) {
+                        $this->relationship($relationships, 'unit:' . $context['class'], 'USES_TRAIT', 'unit:' . $this->resolvedName($trait), $project, $node->getStartLine());
+                    }
+                }
                 if ($node instanceof Node\Stmt\Function_ || $node instanceof Node\Stmt\ClassMethod || $node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction) {
                     $syntheticClosure = $node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction;
                     $callableName = $syntheticClosure ? ($context['declaredCallableName'] ?? null) : null;
@@ -188,21 +193,14 @@ final class Parser
 
     private function relationship(array &$output, string $from, string $type, string $to, string $project, int $line): void
     {
-        $type = match ($type) {
-            'EXTENDS' => 'PHP_EXTENDS',
-            'IMPLEMENTS' => 'PHP_IMPLEMENTS',
-            'OVERRIDES' => 'PHP_OVERRIDES',
-            default => $type,
-        };
-        [$kind, $fromNodeType, $toNodeType] = match ($type) {
-            'PACKAGE_TO_UNIT' => ['CONTAINS', 'CodePackage', 'CodeUnit'],
-            'UNIT_TO_FUNCTION' => ['CONTAINS', 'CodeUnit', 'CodeFunction'],
-            'CALLS' => ['CALL', 'CodeFunction', 'CodeFunction'],
-            'PHP_EXTENDS' => ['SPECIALIZES', 'CodeUnit', 'CodeUnit'],
-            'PHP_IMPLEMENTS' => ['CONFORMS', 'CodeUnit', 'CodeUnit'],
-            'PHP_OVERRIDES' => ['REFINES', 'CodeFunction', 'CodeFunction'],
-            'ENDPOINT_TO_FUNCTION' => ['BINDS_ENDPOINT', 'CodeEndpoint', 'CodeFunction'],
-            'FUNCTION_TO_ENDPOINT' => ['BINDS_ENDPOINT', 'CodeFunction', 'CodeEndpoint'],
+        [$fromNodeType, $toNodeType] = match ($type) {
+            'PACKAGE_TO_UNIT' => ['CodePackage', 'CodeUnit'],
+            'UNIT_TO_FUNCTION' => ['CodeUnit', 'CodeFunction'],
+            'CALLS' => ['CodeFunction', 'CodeFunction'],
+            'EXTENDS', 'IMPLEMENTS', 'USES_TRAIT' => ['CodeUnit', 'CodeUnit'],
+            'OVERRIDES' => ['CodeFunction', 'CodeFunction'],
+            'ENDPOINT_TO_FUNCTION' => ['CodeEndpoint', 'CodeFunction'],
+            'FUNCTION_TO_ENDPOINT' => ['CodeFunction', 'CodeEndpoint'],
             default => throw new \InvalidArgumentException("Missing relationship contract for $type"),
         };
         $id = 'rel:' . sha1("$from|$type|$to");
@@ -211,7 +209,6 @@ final class Parser
             'fromNodeId' => $from,
             'toNodeId' => $to,
             'relationshipType' => $type,
-            'relationshipKind' => $kind,
             'fromNodeType' => $fromNodeType,
             'toNodeType' => $toNodeType,
             'language' => 'php',

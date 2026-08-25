@@ -153,11 +153,13 @@ PHP);
 namespace App;
 interface Gateway { public function send(string $value): string; }
 interface ChildGateway extends Gateway { public function receive(): string; }
+trait Logs { public function log(): void {} }
 abstract class Base {
     public function run(): void {}
     private function hidden(): void {}
 }
 class Service extends Base implements ChildGateway {
+    use Logs;
     public function run(): void {}
     public function send(string $value): string { return $value; }
     public function receive(): string { return 'ok'; }
@@ -171,24 +173,24 @@ PHP);
             $relationships[$item['fromNodeId'] . '|' . $item['relationshipType'] . '|' . $item['toNodeId']] = $item;
         }
         $expected = [
-            'unit:App\ChildGateway|PHP_EXTENDS|unit:App\Gateway',
-            'unit:App\Service|PHP_EXTENDS|unit:App\Base',
-            'unit:App\Service|PHP_IMPLEMENTS|unit:App\ChildGateway',
-            'fn:App\Service::run()|PHP_OVERRIDES|fn:App\Base::run()',
-            'fn:App\Service::send()|PHP_OVERRIDES|fn:App\Gateway::send()',
-            'fn:App\Service::receive()|PHP_OVERRIDES|fn:App\ChildGateway::receive()',
+            'unit:App\ChildGateway|EXTENDS|unit:App\Gateway',
+            'unit:App\Service|EXTENDS|unit:App\Base',
+            'unit:App\Service|IMPLEMENTS|unit:App\ChildGateway',
+            'unit:App\Service|USES_TRAIT|unit:App\Logs',
+            'fn:App\Service::run()|OVERRIDES|fn:App\Base::run()',
+            'fn:App\Service::send()|OVERRIDES|fn:App\Gateway::send()',
+            'fn:App\Service::receive()|OVERRIDES|fn:App\ChildGateway::receive()',
         ];
         foreach ($expected as $key) {
             self::assertArrayHasKey($key, $relationships);
             [$from, $type, $to] = explode('|', $key);
             self::assertSame('rel:' . sha1("$from|$type|$to"), $relationships[$key]['id']);
-            $isOverride = $type === 'PHP_OVERRIDES';
-            self::assertSame($isOverride ? 'REFINES' : ($type === 'PHP_IMPLEMENTS' ? 'CONFORMS' : 'SPECIALIZES'), $relationships[$key]['relationshipKind']);
+            $isOverride = $type === 'OVERRIDES';
             self::assertSame($isOverride ? 'CodeFunction' : 'CodeUnit', $relationships[$key]['fromNodeType']);
             self::assertSame($isOverride ? 'CodeFunction' : 'CodeUnit', $relationships[$key]['toNodeType']);
         }
-        self::assertArrayNotHasKey('fn:App\Service::hidden()|PHP_OVERRIDES|fn:App\Base::hidden()', $relationships);
-        self::assertArrayNotHasKey('fn:App\Unrelated::send()|PHP_OVERRIDES|fn:App\Gateway::send()', $relationships);
+        self::assertArrayNotHasKey('fn:App\Service::hidden()|OVERRIDES|fn:App\Base::hidden()', $relationships);
+        self::assertArrayNotHasKey('fn:App\Unrelated::send()|OVERRIDES|fn:App\Gateway::send()', $relationships);
 
         $nodeIds = array_fill_keys(array_merge(
             array_column($delta['packages'], 'id'),
