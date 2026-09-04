@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['packaging/**', '.github/workflows/release.yml', 'bin/**', 'src/**', 'composer.json', 'composer.lock']
+    paths: ['packaging/**', '.github/workflows/release.yml', 'bin/**', 'src/**', 'tests/**', 'fixtures/**', 'composer.json', 'composer.lock']
 
 permissions:
   contents: write
@@ -23,10 +23,16 @@ jobs:
       - run: mv static-extract-php ../static-extract-php
       - run: composer install --no-interaction && composer test
       - run: ./packaging/build-linux-x64.sh "${GITHUB_REF_NAME:-dev}"
-      - name: Smoke test bundled PHP runtime
+      - name: Smoke test bundled CLI and PHP runtime
         run: |
           package_dir="$(find target/release -maxdepth 1 -type d -name 'parser-php-*' | head -n 1)"
           "$package_dir/runtime/frankenphp" php-cli -r 'echo PHP_VERSION, PHP_EOL;'
+          request="$(jq -nc \
+            --arg root "$PWD/fixtures/basic" \
+            --arg source "$PWD/fixtures/basic/src/App.php" \
+            '{projectName:"release-smoke",language:"php",projectRoot:$root,sourceFiles:[$source],sourceRoots:[$root+"/src"],dependencies:[],changeType:"SOURCE_ADDED"}')"
+          printf '%s\n' "$request" | "$package_dir/bin/parser-php" --stdio \
+            | jq -e '.scope.language == "php" and (.units | length > 0)'
       - uses: actions/upload-artifact@v7
         with:
           name: parser-php-linux-x64
