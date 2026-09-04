@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: praha-poseidon/static-extract-php
+          ref: main
           path: static-extract-php
       - run: mv static-extract-php ../static-extract-php
       - run: composer install --no-interaction && composer test
